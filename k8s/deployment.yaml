@@ -20,7 +20,7 @@ spec:
       - name: dockerhub-secret
       containers:
       - name: ml-model
-        image: ml-model:latest  # Replace with your Docker registry image
+        image: devendranathashok/ml-model
         imagePullPolicy: Always
         ports:
         - containerPort: 5000
