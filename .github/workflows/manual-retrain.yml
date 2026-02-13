@@ -1,0 +1,132 @@
+name: Manual Model Retraining
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset_version:
+        description: 'Dataset version or source'
+        required: false
+        default: 'iris-default'
+      trigger_deployment:
+        description: 'Automatically trigger deployment after training'
+        required: true
+        type: boolean
+        default: false
+      deployment_type:
+        description: 'Deployment type (if auto-deploy enabled)'
+        required: false
+        default: 'kserve'
+        type: choice
+        options:
+          - kserve
+          - standard
+          - none
+
+jobs:
+  retrain-model:
+    name: Retrain ML Model
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run training
+        run: |
+          echo "Training model with dataset: ${{ github.event.inputs.dataset_version }}"
+          python train_model.py
+
+      - name: Validate trained model
+        run: |
+          python -c "
+          import joblib
+          import numpy as np
+
+          # Load model
+          model = joblib.load('model/iris_model.pkl')
+          metadata = joblib.load('model/metadata.pkl')
+
+          # Test prediction
+          test_data = np.array([[5.1, 3.5, 1.4, 0.2]])
+          prediction = model.predict(test_data)
+
+          print(f'Model type: {type(model).__name__}')
+          print(f'Features: {metadata[\"feature_names\"]}')
+          print(f'Test prediction: {prediction[0]}')
+          print('Model validation successful!')
+          "
+
+      - name: Generate model metrics
+        run: |
+          python -c "
+          import joblib
+          import json
+          from sklearn.datasets import load_iris
+          from sklearn.metrics import accuracy_score, classification_report
+
+          # Load model and data
+          model = joblib.load('model/iris_model.pkl')
+          iris = load_iris()
+
+          # Evaluate on full dataset (for demo purposes)
+          predictions = model.predict(iris.data)
+          accuracy = accuracy_score(iris.target, predictions)
+
+          # Save metrics
+          metrics = {
+              'accuracy': float(accuracy),
+              'dataset_version': '${{ github.event.inputs.dataset_version }}',
+              'training_date': '$(date -u +\"%Y-%m-%dT%H:%M:%SZ\")'
+          }
+
+          with open('model_metrics.json', 'w') as f:
+              json.dump(metrics, f, indent=2)
+
+          print(f'Model Accuracy: {accuracy:.4f}')
+          print(classification_report(iris.target, predictions, target_names=iris.target_names))
+          "
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrained-model-${{ github.run_number }}
+          path: |
+            model/
+            model_metrics.json
+          retention-days: 90
+
+      - name: Create release (optional)
+        if: github.event.inputs.trigger_deployment == 'true'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: model-v${{ github.run_number }}
+          release_name: Model Release v${{ github.run_number }}
+          body: |
+            Automated model retraining
+            - Dataset: ${{ github.event.inputs.dataset_version }}
+            - Run: ${{ github.run_number }}
+
+            See artifacts for trained model files.
+          draft: false
+          prerelease: false
+
+  trigger-deployment:
+    name: Trigger Deployment
+    needs: retrain-model
+    if: github.event.inputs.trigger_deployment == 'true' && github.event.inputs.deployment_type != 'none'
+    uses: ./.github/workflows/ci-cd.yml
+    with:
+      deployment_type: ${{ github.event.inputs.deployment_type }}
+    secrets: inherit

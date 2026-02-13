@@ -1,0 +1,383 @@
+name: ML Model CI/CD Pipeline (GKE)
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      deployment_type:
+        description: 'Deployment type'
+        required: true
+        default: 'kserve'
+        type: choice
+        options:
+          - kserve
+          - standard
+
+env:
+  DOCKER_REGISTRY: gcr.io  # Google Container Registry
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GKE_CLUSTER_NAME: ${{ secrets.GKE_CLUSTER_NAME }}
+  GKE_ZONE: ${{ secrets.GKE_ZONE }}  # e.g., us-central1-a
+  IMAGE_NAME: ml-model
+  K8S_NAMESPACE: ml-models
+
+jobs:
+  # Job 1: Train the ML Model
+  train-model:
+    name: Train ML Model
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Train model
+        run: |
+          python train_model.py
+
+      - name: Verify model files
+        run: |
+          ls -la model/
+          test -f model/iris_model.pkl || exit 1
+          test -f model/metadata.pkl || exit 1
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: trained-model
+          path: model/
+          retention-days: 30
+
+  # Job 2: Run Tests
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    needs: train-model
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Download model artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: trained-model
+          path: model/
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest requests
+
+      - name: Test model loading
+        run: |
+          python -c "import joblib; model = joblib.load('model/iris_model.pkl'); print('Model loaded successfully')"
+
+      - name: Start Flask app in background
+        run: |
+          python app.py &
+          sleep 5
+
+      - name: Test health endpoint
+        run: |
+          curl -f http://localhost:5000/health || exit 1
+
+      - name: Test prediction endpoint
+        run: |
+          curl -X POST http://localhost:5000/predict \
+            -H "Content-Type: application/json" \
+            -d '{"features": [5.1, 3.5, 1.4, 0.2]}' \
+            -f || exit 1
+
+  # Job 3: Build and Push to GCR
+  build-and-push:
+    name: Build and Push to GCR
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      image_digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download model artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: trained-model
+          path: model/
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GCR
+        run: |
+          gcloud auth configure-docker
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata
+        id: meta
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          IMAGE_TAG="${{ env.DOCKER_REGISTRY }}/${{ env.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}"
+
+          # Generate tags
+          TAGS="${IMAGE_TAG}:${SHORT_SHA}"
+          TAGS="${TAGS},${IMAGE_TAG}:${{ github.ref_name }}"
+
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            TAGS="${TAGS},${IMAGE_TAG}:latest"
+          fi
+
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+          echo "primary_tag=${IMAGE_TAG}:${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Image vulnerability scanning (optional)
+        run: |
+          gcloud container images scan ${{ steps.meta.outputs.primary_tag }} || echo "Vulnerability scanning skipped"
+
+  # Job 4: Deploy to GKE (Standard Kubernetes)
+  deploy-standard-gke:
+    name: Deploy to GKE (Standard)
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.deployment_type == 'standard')
+    environment:
+      name: production-gke-standard
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install gke-gcloud-auth-plugin
+        run: |
+          gcloud components install gke-gcloud-auth-plugin
+
+      - name: Get GKE credentials
+        run: |
+          gcloud container clusters get-credentials ${{ env.GKE_CLUSTER_NAME }} \
+            --zone ${{ env.GKE_ZONE }} \
+            --project ${{ env.GCP_PROJECT_ID }}
+
+      - name: Verify cluster connection
+        run: |
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Update image in deployment
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          IMAGE_FULL="${{ env.DOCKER_REGISTRY }}/${{ env.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${SHORT_SHA}"
+          sed -i "s|image: ml-model:latest|image: ${IMAGE_FULL}|g" k8s/deployment.yaml
+
+      - name: Create namespace if not exists
+        run: |
+          kubectl create namespace ${{ env.K8S_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy to GKE
+        run: |
+          kubectl apply -f k8s/deployment.yaml -n ${{ env.K8S_NAMESPACE }}
+          kubectl apply -f k8s/hpa.yaml -n ${{ env.K8S_NAMESPACE }}
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/ml-model-deployment -n ${{ env.K8S_NAMESPACE }} --timeout=5m
+
+      - name: Verify deployment
+        run: |
+          kubectl get deployments -n ${{ env.K8S_NAMESPACE }}
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }}
+          kubectl get services -n ${{ env.K8S_NAMESPACE }}
+
+      - name: Get service endpoint
+        run: |
+          echo "Waiting for LoadBalancer IP..."
+          kubectl get service ml-model-service -n ${{ env.K8S_NAMESPACE }} -w &
+          WAIT_PID=$!
+          sleep 30
+          kill $WAIT_PID 2>/dev/null || true
+
+          EXTERNAL_IP=$(kubectl get service ml-model-service -n ${{ env.K8S_NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "Service endpoint: http://${EXTERNAL_IP}"
+
+      - name: Run smoke tests
+        run: |
+          kubectl run test-pod --image=curlimages/curl --rm -i --restart=Never -n ${{ env.K8S_NAMESPACE }} -- \
+            curl -f http://ml-model-service/health || echo "Smoke test completed"
+
+  # Job 5: Deploy to GKE with KServe
+  deploy-kserve-gke:
+    name: Deploy to GKE (KServe)
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.deployment_type == 'kserve')
+    environment:
+      name: production-gke-kserve
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install gke-gcloud-auth-plugin
+        run: |
+          gcloud components install gke-gcloud-auth-plugin
+
+      - name: Get GKE credentials
+        run: |
+          gcloud container clusters get-credentials ${{ env.GKE_CLUSTER_NAME }} \
+            --zone ${{ env.GKE_ZONE }} \
+            --project ${{ env.GCP_PROJECT_ID }}
+
+      - name: Verify cluster connection
+        run: |
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Check KServe installation
+        run: |
+          kubectl get pods -n kserve 2>/dev/null || echo "KServe namespace not found"
+          kubectl get crd inferenceservices.serving.kserve.io || echo "KServe CRD not found"
+
+      - name: Create namespace if not exists
+        run: |
+          kubectl create namespace ${{ env.K8S_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Update image in InferenceService
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          IMAGE_FULL="${{ env.DOCKER_REGISTRY }}/${{ env.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${SHORT_SHA}"
+          sed -i "s|image: ml-model:latest.*|image: ${IMAGE_FULL}|g" k8s/kserve-inferenceservice.yaml
+
+      - name: Deploy InferenceService
+        run: |
+          kubectl apply -f k8s/kserve-inferenceservice.yaml -n ${{ env.K8S_NAMESPACE }}
+
+      - name: Wait for InferenceService to be ready
+        run: |
+          timeout=300
+          elapsed=0
+          while [ $elapsed -lt $timeout ]; do
+            status=$(kubectl get inferenceservice iris-model -n ${{ env.K8S_NAMESPACE }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "False")
+            if [ "$status" = "True" ]; then
+              echo "✅ InferenceService is ready!"
+              exit 0
+            fi
+            echo "⏳ Waiting for InferenceService to be ready... ($elapsed/$timeout seconds)"
+            sleep 10
+            elapsed=$((elapsed + 10))
+          done
+          echo "❌ Timeout waiting for InferenceService"
+          kubectl describe inferenceservice iris-model -n ${{ env.K8S_NAMESPACE }}
+          exit 1
+
+      - name: Get InferenceService details
+        run: |
+          kubectl get inferenceservice iris-model -n ${{ env.K8S_NAMESPACE }}
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }}
+          kubectl describe inferenceservice iris-model -n ${{ env.K8S_NAMESPACE }}
+
+      - name: Get service URL
+        run: |
+          SERVICE_URL=$(kubectl get inferenceservice iris-model -n ${{ env.K8S_NAMESPACE }} -o jsonpath='{.status.url}')
+          echo "🚀 Service URL: ${SERVICE_URL}"
+
+      - name: Run smoke tests
+        run: |
+          SERVICE_NAME=$(kubectl get inferenceservice iris-model -n ${{ env.K8S_NAMESPACE }} -o jsonpath='{.status.components.predictor.url}' || echo "")
+          if [ -n "$SERVICE_NAME" ]; then
+            kubectl run test-pod --image=curlimages/curl --rm -i --restart=Never -n ${{ env.K8S_NAMESPACE }} -- \
+              curl -f $SERVICE_NAME/health || echo "Health check completed"
+          fi
+
+  # Job 6: Notify on completion
+  notify:
+    name: Notify Deployment Status
+    runs-on: ubuntu-latest
+    needs: [deploy-standard-gke, deploy-kserve-gke]
+    if: always()
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Send notification
+        run: |
+          echo "🎉 Deployment completed!"
+          echo "Standard K8s: ${{ needs.deploy-standard-gke.result }}"
+          echo "KServe: ${{ needs.deploy-kserve-gke.result }}"
+
+          # Optional: Send to Google Chat
+          # WEBHOOK_URL="${{ secrets.GOOGLE_CHAT_WEBHOOK }}"
+          # if [ -n "$WEBHOOK_URL" ]; then
+          #   curl -X POST "$WEBHOOK_URL" -H 'Content-Type: application/json' \
+          #     -d "{\"text\": \"Deployment completed: Standard=${{ needs.deploy-standard-gke.result }}, KServe=${{ needs.deploy-kserve-gke.result }}\"}"
+          # fi
+
+      - name: Update Cloud Logging (optional)
+        run: |
+          gcloud logging write github-actions-deployment \
+            "Deployment completed - SHA: ${{ github.sha }}, Status: Standard=${{ needs.deploy-standard-gke.result }}, KServe=${{ needs.deploy-kserve-gke.result }}" \
+            --severity=INFO \
+            --project=${{ env.GCP_PROJECT_ID }} || echo "Logging skipped"

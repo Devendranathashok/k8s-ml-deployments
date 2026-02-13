@@ -1,0 +1,49 @@
+# KServe InferenceService for model serving
+# Requires KServe to be installed in your cluster
+# Install: https://kserve.github.io/website/latest/admin/serverless/serverless/
+
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: iris-model
+  annotations:
+    serving.kserve.io/enable-prometheus-scraping: "true"
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 5
+    containers:
+    - name: kserve-container
+      image: ml-model:latest  # Replace with your Docker registry image
+      ports:
+      - containerPort: 5000
+        protocol: TCP
+      env:
+      - name: PORT
+        value: "5000"
+      - name: STORAGE_URI
+        value: "pvc://model-pvc/model"  # Optional: Use PVC for model storage
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "256Mi"
+        limits:
+          cpu: "500m"
+          memory: "512Mi"
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 5000
+        initialDelaySeconds: 10
+        periodSeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 5000
+        initialDelaySeconds: 5
+        periodSeconds: 5
+  # Optional: Add transformer for pre/post processing
+  # transformer:
+  #   containers:
+  #   - name: transformer
+  #     image: your-transformer-image:latest
