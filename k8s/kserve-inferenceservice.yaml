@@ -35,14 +35,18 @@ spec:
         httpGet:
           path: /health
           port: 5000
-        initialDelaySeconds: 10
+        initialDelaySeconds: 30
         periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 3
       readinessProbe:
         httpGet:
           path: /health
           port: 5000
-        initialDelaySeconds: 5
+        initialDelaySeconds: 20
         periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 3
   # Optional: Add transformer for pre/post processing
   # transformer:
   #   containers:
