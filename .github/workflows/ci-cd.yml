@@ -219,20 +219,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Debug job inputs
-        run: |
-          echo "🔍 Debug: Checking received job outputs..."
-          echo "  image_tag from build: ${{ needs.build-and-push.outputs.image_tag }}"
-          echo "  image_digest from build: ${{ needs.build-and-push.outputs.image_digest }}"
-
-          if [ -z "${{ needs.build-and-push.outputs.image_tag }}" ]; then
-            echo "❌ ERROR: No image_tag received from build-and-push job!"
-            echo "This means the build job may have failed or didn't set outputs correctly."
-            exit 1
-          fi
-
-          echo "✅ Received image tag successfully"
-
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -258,30 +244,9 @@ jobs:
 
       - name: Update image in deployment
         run: |
-          IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
-
-          if [ -z "$IMAGE_TAG" ]; then
-            echo "❌ ERROR: IMAGE_TAG is empty!"
-            exit 1
-          fi
-
-          echo "📦 Using image: ${IMAGE_TAG}"
-
-          # Update the image in deployment.yaml
-          sed -i "s|image: ml-model:latest.*|image: ${IMAGE_TAG}|g" k8s/deployment.yaml
-
-          echo "✅ Updated deployment.yaml:"
-          grep "image:" k8s/deployment.yaml | head -5
-
-          echo ""
-          echo "🔍 Verifying image field is set:"
-          if grep -q "image: ml-model:latest" k8s/deployment.yaml; then
-            echo "❌ ERROR: Image was not replaced!"
-            cat k8s/deployment.yaml | grep -A2 -B2 "image:"
-            exit 1
-          else
-            echo "✅ Image successfully updated"
-          fi
+          IMAGE_TAG="${{ secrets.DOCKER_USERNAME }}/ml-model:${{ github.ref_name }}-$(echo ${{ github.sha }} | cut -c1-7)"
+          echo "Using: ${IMAGE_TAG}"
+          sed -i "s|image: ml-model:latest|image: ${IMAGE_TAG}|g" k8s/deployment.yaml
 
       - name: Create namespace if not exists
         run: |
@@ -343,20 +308,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Debug job inputs
-        run: |
-          echo "🔍 Debug: Checking received job outputs..."
-          echo "  image_tag from build: ${{ needs.build-and-push.outputs.image_tag }}"
-          echo "  image_digest from build: ${{ needs.build-and-push.outputs.image_digest }}"
-
-          if [ -z "${{ needs.build-and-push.outputs.image_tag }}" ]; then
-            echo "❌ ERROR: No image_tag received from build-and-push job!"
-            echo "This means the build job may have failed or didn't set outputs correctly."
-            exit 1
-          fi
-
-          echo "✅ Received image tag successfully"
-
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -401,30 +352,9 @@ jobs:
 
       - name: Update image in InferenceService
         run: |
-          IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
-
-          if [ -z "$IMAGE_TAG" ]; then
-            echo "❌ ERROR: IMAGE_TAG is empty!"
-            exit 1
-          fi
-
-          echo "📦 Using image: ${IMAGE_TAG}"
-
-          # Update the image in kserve-inferenceservice.yaml
-          sed -i "s|image: ml-model:latest.*|image: ${IMAGE_TAG}|g" k8s/kserve-inferenceservice.yaml
-
-          echo "✅ Updated kserve-inferenceservice.yaml:"
-          grep "image:" k8s/kserve-inferenceservice.yaml
-
-          echo ""
-          echo "🔍 Verifying image field is set:"
-          if grep -q "image: ml-model:latest" k8s/kserve-inferenceservice.yaml; then
-            echo "❌ ERROR: Image was not replaced!"
-            cat k8s/kserve-inferenceservice.yaml | grep -A2 -B2 "image:"
-            exit 1
-          else
-            echo "✅ Image successfully updated"
-          fi
+          IMAGE_TAG="${{ secrets.DOCKER_USERNAME }}/ml-model:${{ github.ref_name }}-$(echo ${{ github.sha }} | cut -c1-7)"
+          echo "Using: ${IMAGE_TAG}"
+          sed -i "s|image: ml-model:latest|image: ${IMAGE_TAG}|g" k8s/kserve-inferenceservice.yaml
 
       - name: Deploy InferenceService
         run: |
