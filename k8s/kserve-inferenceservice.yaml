@@ -8,6 +8,9 @@ metadata:
   name: iris-model
   annotations:
     serving.kserve.io/enable-prometheus-scraping: "true"
+    # Keep only 1 revision (auto-cleanup old ones)
+    autoscaling.knative.dev/min-scale: "1"
+    serving.knative.dev/revision-gc: "true"
 spec:
   predictor:
     minReplicas: 1
