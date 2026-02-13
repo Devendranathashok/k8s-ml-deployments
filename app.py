@@ -191,10 +191,12 @@ def predict_batch():
             'type': type(e).__name__
         }), 500
 
-if __name__ == '__main__':
-    # Load model on startup
-    load_model()
+# Load model at module level (runs with gunicorn)
+print("Loading model...")
+load_model()
+print("Model loaded successfully!")
 
-    # Run the app
+if __name__ == '__main__':
+    # Run the app directly (development only)
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
