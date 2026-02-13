@@ -117,7 +117,7 @@ jobs:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
 
     outputs:
-      image_tag: ${{ steps.primary.outputs.primary_tag }}
+      image_tag: ${{ steps.tags.outputs.primary_tag }}
       image_digest: ${{ steps.build.outputs.digest }}
 
     steps:
@@ -139,24 +139,25 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
-          flavor: |
-            latest=auto
-
-      - name: Get primary tag
-        id: primary
+      - name: Generate image tags
+        id: tags
         run: |
+          DOCKER_USER="${{ secrets.DOCKER_USERNAME }}"
+          IMAGE_NAME="${{ env.IMAGE_NAME }}"
           SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
-          PRIMARY_TAG="${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-${SHORT_SHA}"
+          BRANCH_NAME="${{ github.ref_name }}"
+
+          # Primary tag with branch and SHA
+          PRIMARY_TAG="${DOCKER_USER}/${IMAGE_NAME}:${BRANCH_NAME}-${SHORT_SHA}"
+          LATEST_TAG="${DOCKER_USER}/${IMAGE_NAME}:latest"
+
           echo "primary_tag=${PRIMARY_TAG}" >> $GITHUB_OUTPUT
+          echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
+          echo "all_tags=${PRIMARY_TAG},${LATEST_TAG}" >> $GITHUB_OUTPUT
+
+          echo "📦 Generated tags:"
+          echo "  Primary: ${PRIMARY_TAG}"
+          echo "  Latest: ${LATEST_TAG}"
 
       - name: Build and push Docker image
         id: build
@@ -164,8 +165,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.tags.outputs.all_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
@@ -211,10 +211,29 @@ jobs:
       - name: Update image in deployment
         run: |
           IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+
+          if [ -z "$IMAGE_TAG" ]; then
+            echo "❌ ERROR: IMAGE_TAG is empty!"
+            exit 1
+          fi
+
           echo "📦 Using image: ${IMAGE_TAG}"
-          sed -i "s|image: ml-model:latest|image: ${IMAGE_TAG}|g" k8s/deployment.yaml
+
+          # Update the image in deployment.yaml
+          sed -i "s|image: ml-model:latest.*|image: ${IMAGE_TAG}|g" k8s/deployment.yaml
+
           echo "✅ Updated deployment.yaml:"
-          grep "image:" k8s/deployment.yaml
+          grep "image:" k8s/deployment.yaml | head -5
+
+          echo ""
+          echo "🔍 Verifying image field is set:"
+          if grep -q "image: ml-model:latest" k8s/deployment.yaml; then
+            echo "❌ ERROR: Image was not replaced!"
+            cat k8s/deployment.yaml | grep -A2 -B2 "image:"
+            exit 1
+          else
+            echo "✅ Image successfully updated"
+          fi
 
       - name: Create namespace if not exists
         run: |
@@ -321,10 +340,29 @@ jobs:
       - name: Update image in InferenceService
         run: |
           IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+
+          if [ -z "$IMAGE_TAG" ]; then
+            echo "❌ ERROR: IMAGE_TAG is empty!"
+            exit 1
+          fi
+
           echo "📦 Using image: ${IMAGE_TAG}"
+
+          # Update the image in kserve-inferenceservice.yaml
           sed -i "s|image: ml-model:latest.*|image: ${IMAGE_TAG}|g" k8s/kserve-inferenceservice.yaml
+
           echo "✅ Updated kserve-inferenceservice.yaml:"
           grep "image:" k8s/kserve-inferenceservice.yaml
+
+          echo ""
+          echo "🔍 Verifying image field is set:"
+          if grep -q "image: ml-model:latest" k8s/kserve-inferenceservice.yaml; then
+            echo "❌ ERROR: Image was not replaced!"
+            cat k8s/kserve-inferenceservice.yaml | grep -A2 -B2 "image:"
+            exit 1
+          else
+            echo "✅ Image successfully updated"
+          fi
 
       - name: Deploy InferenceService
         run: |
