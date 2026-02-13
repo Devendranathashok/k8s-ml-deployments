@@ -367,24 +367,3 @@ jobs:
               curl -f $SERVICE_NAME/health || echo "Health check completed"
           fi
 
-  # Job 6: Notify on completion
-  notify:
-    name: Notify Deployment Status
-    runs-on: ubuntu-latest
-    needs: [build-and-push, deploy-standard-gke, deploy-kserve-gke]
-    if: always()
-
-    steps:
-      - name: Send notification
-        run: |
-          echo "🎉 Deployment completed!"
-          echo "Image: ${{ needs.build-and-push.outputs.image_tag }}"
-          echo "Standard K8s: ${{ needs.deploy-standard-gke.result }}"
-          echo "KServe: ${{ needs.deploy-kserve-gke.result }}"
-
-          # Optional: Send to Slack/Discord
-          # WEBHOOK_URL="${{ secrets.SLACK_WEBHOOK }}"
-          # if [ -n "$WEBHOOK_URL" ]; then
-          #   curl -X POST "$WEBHOOK_URL" -H 'Content-Type: application/json' \
-          #     -d "{\"text\": \"Deployment completed: Image=${{ needs.build-and-push.outputs.image_tag }}, Standard=${{ needs.deploy-standard-gke.result }}, KServe=${{ needs.deploy-kserve-gke.result }}\"}"
-          # fi
