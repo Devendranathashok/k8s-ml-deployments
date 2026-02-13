@@ -5,7 +5,9 @@
       "Bash(ren:*)",
       "Bash(python train_custom.py:*)",
       "Bash(git commit:*)",
-      "Bash(gh run list:*)"
+      "Bash(gh run list:*)",
+      "Bash(gh repo create:*)",
+      "Bash(git remote add:*)"
     ]
   }
 }
