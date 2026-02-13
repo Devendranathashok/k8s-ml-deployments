@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(del:*)",
-      "Bash(ren:*)"
+      "Bash(ren:*)",
+      "Bash(python train_custom.py:*)",
+      "Bash(git commit:*)",
+      "Bash(gh run list:*)"
     ]
   }
 }
