@@ -117,7 +117,7 @@ jobs:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
 
     outputs:
-      image_tag: ${{ steps.meta.outputs.primary_tag }}
+      image_tag: ${{ steps.primary.outputs.primary_tag }}
       image_digest: ${{ steps.build.outputs.digest }}
 
     steps:
@@ -211,11 +211,24 @@ jobs:
       - name: Update image in deployment
         run: |
           IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+          echo "📦 Using image: ${IMAGE_TAG}"
           sed -i "s|image: ml-model:latest|image: ${IMAGE_TAG}|g" k8s/deployment.yaml
+          echo "✅ Updated deployment.yaml:"
+          grep "image:" k8s/deployment.yaml
 
       - name: Create namespace if not exists
         run: |
           kubectl create namespace ${{ env.K8S_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create Docker Hub secret
+        run: |
+          kubectl create secret docker-registry dockerhub-secret \
+            --docker-server=docker.io \
+            --docker-username=${{ secrets.DOCKER_USERNAME }} \
+            --docker-password=${{ secrets.DOCKER_PASSWORD }} \
+            --namespace=${{ env.K8S_NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+          echo "✅ Docker Hub secret created/updated"
 
       - name: Deploy to GKE
         run: |
@@ -295,10 +308,23 @@ jobs:
         run: |
           kubectl create namespace ${{ env.K8S_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
 
+      - name: Create Docker Hub secret
+        run: |
+          kubectl create secret docker-registry dockerhub-secret \
+            --docker-server=docker.io \
+            --docker-username=${{ secrets.DOCKER_USERNAME }} \
+            --docker-password=${{ secrets.DOCKER_PASSWORD }} \
+            --namespace=${{ env.K8S_NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+          echo "✅ Docker Hub secret created/updated"
+
       - name: Update image in InferenceService
         run: |
           IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+          echo "📦 Using image: ${IMAGE_TAG}"
           sed -i "s|image: ml-model:latest.*|image: ${IMAGE_TAG}|g" k8s/kserve-inferenceservice.yaml
+          echo "✅ Updated kserve-inferenceservice.yaml:"
+          grep "image:" k8s/kserve-inferenceservice.yaml
 
       - name: Deploy InferenceService
         run: |

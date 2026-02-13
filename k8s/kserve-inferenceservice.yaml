@@ -12,17 +12,18 @@ spec:
   predictor:
     minReplicas: 1
     maxReplicas: 5
+    imagePullSecrets:
+    - name: dockerhub-secret
     containers:
     - name: kserve-container
       image: ml-model:latest  # Replace with your Docker registry image
       ports:
       - containerPort: 5000
         protocol: TCP
+        name: http1
       env:
-      - name: PORT
-        value: "5000"
-      - name: STORAGE_URI
-        value: "pvc://model-pvc/model"  # Optional: Use PVC for model storage
+      - name: MODEL_NAME
+        value: "iris-model"
       resources:
         requests:
           cpu: "250m"

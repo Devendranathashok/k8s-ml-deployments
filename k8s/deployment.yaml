@@ -16,10 +16,12 @@ spec:
         app: ml-model
         version: v1
     spec:
+      imagePullSecrets:
+      - name: dockerhub-secret
       containers:
       - name: ml-model
         image: ml-model:latest  # Replace with your Docker registry image
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         ports:
         - containerPort: 5000
           name: http
