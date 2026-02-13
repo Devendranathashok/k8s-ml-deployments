@@ -8,6 +8,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
+from sklearn.preprocessing import LabelEncoder
 import joblib
 import os
 import argparse
@@ -29,13 +30,16 @@ def load_custom_data(csv_path, target_column, feature_columns=None):
         X = df.drop(columns=[target_column]).values
         feature_columns = df.drop(columns=[target_column]).columns.tolist()
 
-    y = df[target_column].values
+    # Encode string labels to integers
+    label_encoder = LabelEncoder()
+    y = label_encoder.fit_transform(df[target_column].values)
 
-    # Get target names
-    target_names = sorted(df[target_column].unique())
+    # Get target names in the order of encoded labels
+    target_names = label_encoder.classes_.tolist()
 
     print(f"\nFeatures: {feature_columns}")
     print(f"Target classes: {target_names}")
+    print(f"Label encoding: {dict(enumerate(target_names))}")
     print(f"Class distribution:")
     print(df[target_column].value_counts())
 
