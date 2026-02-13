@@ -45,9 +45,9 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Train model
+      - name: Train model with CSV data
         run: |
-          python train_model.py
+          python train_custom.py --data sample_iris_data.csv --target species
 
       - name: Verify model files
         run: |
