@@ -50,3 +50,5 @@ sepal_length,sepal_width,petal_length,petal_width,species
 6.4,2.8,5.6,2.1,irisblueflag
 7.2,3.0,5.8,1.6,irisblueflag
 7.4,2.8,6.1,1.9,irisblueflag
+8,8,9,9,rose
+9,9,9,10,jasmin
